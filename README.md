@@ -15,3 +15,7 @@ Or open the project in Android Studio and run it on a device.
 ## Tuning
 - `ORIENTATION` in `MainActivity.kt` maps IMU axes to the camera frame. Verify it once per phone in Gyroflow.
 - Video is fixed at 1080p30 (`W`, `H`, `FPS` constants). No audio.
+
+## Resolution & storage
+- The spinner lists every video size the camera reports (≥720p); choice is remembered.
+- **Storage** lets you pick a folder via Android's folder picker (choose a folder on the SD card; Android 11+ won't allow a volume root). Default is `Download/GyroCam`.
