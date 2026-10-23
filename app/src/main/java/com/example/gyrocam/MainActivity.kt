@@ -5,7 +5,10 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ContentValues
 import android.content.pm.PackageManager
+import android.content.pm.ActivityInfo
 import android.graphics.Color
+import android.graphics.Matrix
+import android.hardware.display.DisplayManager
 import android.graphics.SurfaceTexture
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -59,9 +62,6 @@ class MainActivity : Activity(), SensorEventListener {
         camMgr = getSystemService(CAMERA_SERVICE) as CameraManager
         sm = getSystemService(SENSOR_SERVICE) as SensorManager
 
-        val dm = resources.displayMetrics
-        val h = dm.heightPixels
-        val w = minOf(dm.widthPixels, h * 16 / 9)
         val root = FrameLayout(this)
         tv = TextureView(this)
         tv.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -70,7 +70,16 @@ class MainActivity : Activity(), SensorEventListener {
             override fun onSurfaceTextureDestroyed(s: SurfaceTexture) = true
             override fun onSurfaceTextureUpdated(s: SurfaceTexture) {}
         }
-        root.addView(tv, FrameLayout.LayoutParams(w, h, Gravity.CENTER))
+        root.addView(tv, FrameLayout.LayoutParams(1, 1, Gravity.CENTER))
+        // Fit the preview to the real window size at 16:9 (no stretching), in either landscape.
+        root.addOnLayoutChangeListener { _, l, t, r, b, _, _, _, _ ->
+            val rw = r - l; val rh = b - t
+            if (rw == 0 || rh == 0) return@addOnLayoutChangeListener
+            val w = minOf(rw, rh * W / H); val h = w * H / W
+            val lp = tv.layoutParams
+            if (lp.width != w || lp.height != h) { lp.width = w; lp.height = h; tv.post { tv.layoutParams = lp } }
+        }
+        tv.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyRotation() }
         status = TextView(this).apply {
             setTextColor(Color.WHITE); setBackgroundColor(0x66000000); setPadding(16, 8, 16, 8)
         }
@@ -85,9 +94,31 @@ class MainActivity : Activity(), SensorEventListener {
 
     override fun onRequestPermissionsResult(c: Int, p: Array<out String>, r: IntArray) = openCamera()
 
-    override fun onResume() { super.onResume(); openCamera() }
+    private val dispListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(id: Int) {}
+        override fun onDisplayRemoved(id: Int) {}
+        override fun onDisplayChanged(id: Int) = applyRotation()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun rotation() = windowManager.defaultDisplay.rotation
+
+    // Sensor frames are fixed; when the phone is held in reverse landscape the preview must be flipped 180.
+    private fun applyRotation() {
+        val m = Matrix()
+        if (rotation() == Surface.ROTATION_270) m.postRotate(180f, tv.width / 2f, tv.height / 2f)
+        tv.setTransform(m)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        (getSystemService(DISPLAY_SERVICE) as DisplayManager).registerDisplayListener(dispListener, null)
+        applyRotation()
+        openCamera()
+    }
 
     override fun onPause() {
+        (getSystemService(DISPLAY_SERVICE) as DisplayManager).unregisterDisplayListener(dispListener)
         if (recording) stopRecording()
         session?.close(); session = null
         camera?.close(); camera = null
@@ -170,9 +201,10 @@ class MainActivity : Activity(), SensorEventListener {
         r.setVideoEncodingBitRate(40_000_000)
         r.setVideoFrameRate(FPS)
         r.setVideoSize(W, H)
-        r.setOrientationHint(0)
+        r.setOrientationHint(if (rotation() == Surface.ROTATION_270) 180 else 0)
         r.prepare()
         recorder = r
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED  // no rotating mid-clip
         session?.close()
         createSession(listOf(previewSurface(), r.surface), CameraDevice.TEMPLATE_RECORD) {
             synchronized(lock) { n = 0 }
@@ -194,6 +226,7 @@ class MainActivity : Activity(), SensorEventListener {
         recorder?.release(); recorder = null
         pfd?.close(); pfd = null
         btn.text = "Record"
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         writeGcsv(baseName)
         startPreview()
     }
