@@ -11,6 +11,7 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -88,7 +89,11 @@ class MainActivity : Activity(), SensorEventListener {
         root.addOnLayoutChangeListener { _, l, t, r, b, _, _, _, _ ->
             val rw = r - l; val rh = b - t
             if (rw == 0 || rh == 0) return@addOnLayoutChangeListener
-            val w = minOf(rw, rh * pw / ph); val h = w * ph / pw
+            // Camera2 hands the preview surface frames already turned to the phone's natural (portrait)
+            // orientation, so the view's aspect depends on the display rotation.
+            val land = isLandscape()
+            val aw = if (land) pw else ph; val ah = if (land) ph else pw
+            val w = minOf(rw, rh * aw / ah); val h = w * ah / aw
             val lp = tv.layoutParams
             if (lp.width != w || lp.height != h) { lp.width = w; lp.height = h; tv.post { tv.layoutParams = lp } }
         }
@@ -119,7 +124,7 @@ class MainActivity : Activity(), SensorEventListener {
     private val dispListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(id: Int) {}
         override fun onDisplayRemoved(id: Int) {}
-        override fun onDisplayChanged(id: Int) = applyRotation()
+        override fun onDisplayChanged(id: Int) { root.requestLayout(); applyRotation() }
     }
 
     @Suppress("DEPRECATION")
@@ -131,9 +136,23 @@ class MainActivity : Activity(), SensorEventListener {
         return (sensorOrientation - disp + 360) % 360
     }
 
+    private fun isLandscape() = rotation().let { it == Surface.ROTATION_90 || it == Surface.ROTATION_270 }
+
+    /** Standard Camera2 TextureView transform: undo the view's stretch, then rotate for landscape. */
     private fun applyRotation() {
+        val vwF = tv.width.toFloat(); val vhF = tv.height.toFloat()
+        if (vwF == 0f || vhF == 0f) return
+        val cx = vwF / 2f; val cy = vhF / 2f
+        val r = rotation()
         val m = Matrix()
-        m.postRotate(relRotation().toFloat(), tv.width / 2f, tv.height / 2f)
+        if (r == Surface.ROTATION_90 || r == Surface.ROTATION_270) {
+            val buf = RectF(0f, 0f, ph.toFloat(), pw.toFloat())
+            buf.offset(cx - buf.centerX(), cy - buf.centerY())
+            m.setRectToRect(RectF(0f, 0f, vwF, vhF), buf, Matrix.ScaleToFit.FILL)
+            val s = maxOf(vhF / ph, vwF / pw)
+            m.postScale(s, s, cx, cy)
+            m.postRotate(90f * (r - 2), cx, cy)
+        } else if (r == Surface.ROTATION_180) m.postRotate(180f, cx, cy)
         tv.setTransform(m)
     }
 
@@ -331,7 +350,7 @@ class MainActivity : Activity(), SensorEventListener {
         pfd?.close(); pfd = null
         btn.text = "Record"
         resSpin.isEnabled = true
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
         writeGcsv(baseName)
         startPreview()
     }
